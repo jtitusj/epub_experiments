@@ -41,7 +41,7 @@ conda run -p ./.conda/epub-exp python -m pip install -e ".[dev]"
 
 Activate:
 ```bash
-conda activate /Users/johntitusjungao/Documents/github/epub_experiments/.conda/epub-exp
+conda activate ./.conda/epub-exp
 ```
 
 Test:
