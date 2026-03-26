@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .audify import prepare_epub_for_audify
 from .gutenberg import GutenbergClient
+from .novelbin import NovelBinClient, create_novel_epub, load_chapters_from_disk
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -87,6 +88,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional cleanup profile for a specific book",
     )
 
+    novelbin_parser = subparsers.add_parser(
+        "scrape-novelbin", help="Scrape chapters from NovelBin and create an EPUB"
+    )
+    novelbin_parser.add_argument(
+        "--start-url", required=True, help="URL of the first chapter to scrape"
+    )
+    novelbin_parser.add_argument("--title", required=True, help="Title of the novel")
+    novelbin_parser.add_argument("--author", default="Unknown", help="Author of the novel")
+    novelbin_parser.add_argument(
+        "--raw-dir",
+        type=Path,
+        help="Directory to save/load raw chapter JSON files (for incremental scraping)",
+    )
+    novelbin_parser.add_argument(
+        "--output-epub",
+        type=Path,
+        default=Path("data/processed/novel.epub"),
+        help="Path to the output EPUB file",
+    )
+    novelbin_parser.add_argument(
+        "--max-chapters", type=int, help="Maximum number of chapters to scrape"
+    )
+
     return parser
 
 
@@ -128,6 +152,33 @@ def main() -> None:
             profile=args.profile,
         )
         print(f"Prepared: {output_path} ({parts} parts)")
+    elif args.command == "scrape-novelbin":
+        client = NovelBinClient()
+        
+        # Scrape new chapters (will resume if raw-dir has content)
+        client.scrape_all_chapters(
+            args.start_url, 
+            save_dir=args.raw_dir, 
+            max_chapters=args.max_chapters
+        )
+        
+        # Load all chapters from disk if raw_dir was provided
+        if args.raw_dir:
+            chapters = load_chapters_from_disk(args.raw_dir)
+        else:
+            # If no raw_dir, we don't have persistence, but we still need chapters to build EPUB
+            # This case is less common now that we support raw-dir.
+            print("Warning: --raw-dir not provided. No incremental saving/resumability.")
+            chapters = client.scrape_all_chapters(args.start_url, max_chapters=args.max_chapters)
+
+        if not chapters:
+            print("No chapters found to create EPUB.")
+            return
+
+        output_path = create_novel_epub(
+            title=args.title, author=args.author, chapters=chapters, output_path=args.output_epub
+        )
+        print(f"Created EPUB: {output_path} with {len(chapters)} chapters")
 
 
 if __name__ == "__main__":
