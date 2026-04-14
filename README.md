@@ -11,16 +11,19 @@ The project currently supports:
 - cleaning TTS-unfriendly content such as notes, references, and boilerplate
 - splitting long books into shorter listening parts
 - generating EPUB navigation/TOC entries for Audify
+- extracting text from PDF books and creating chaptered EPUB output
 
 Validated examples:
 
 - Benjamin Franklin: `https://www.gutenberg.org/ebooks/20203`
 - Marcus Aurelius: `https://www.gutenberg.org/ebooks/2680`
+- `Project Mary Hail.pdf` (local PDF workflow)
 
 ## Project Layout
 
 - `src/epub_experiments/gutenberg.py`: Gutenberg page parsing, metadata extraction, and EPUB download
 - `src/epub_experiments/audify.py`: EPUB cleanup, chunking, and TOC generation
+- `src/epub_experiments/pdf_ingest.py`: PDF text extraction, chapter detection, and EPUB creation
 - `src/epub_experiments/cli.py`: command-line entrypoint
 - `tests/`: parser and transformation tests
 - `data/raw/`: downloaded source EPUBs
@@ -97,6 +100,16 @@ Example processed output:
 data/processed/Marcus Aurelius, Emperor of Rome, 121-180 - Meditations.audify.epub
 ```
 
+Prepare a PDF for Audify:
+
+```bash
+conda run -p ./.conda/epub-exp epub-exp prepare-pdf \
+  --input-pdf "Project Mary Hail.pdf" \
+  --output-epub "data/processed/Project Mary Hail.audify.epub" \
+  --target-minutes 10 \
+  --words-per-minute 150
+```
+
 ## Profiles
 
 `prepare-audify` and `process-gutenberg` support:
@@ -119,9 +132,12 @@ Processed EPUBs are rewritten to improve listening:
 - chapter headings are preserved and used as navigation structure
 - an NCX table of contents is generated so Audify can jump by chapter and part
 - common TTS-disrupting references and note markup are removed
+- PDF chapter headings are detected where available; otherwise synthetic chapter splits are generated
+- non-text/image-only PDFs currently require OCR support (not yet implemented)
 
 ## Notes
 
 - Project Gutenberg markup varies by book, so the generic path is intentionally conservative.
 - The Franklin-specific cleanup is explicit because that edition contains editor material and annotation markup mixed into the reading flow.
+- PDF extraction is conservative and removes only high-confidence repeated page headers/footers.
 - Respect Project Gutenberg's Terms of Use when downloading and redistributing files.

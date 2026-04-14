@@ -6,6 +6,7 @@ from pathlib import Path
 from .audify import prepare_epub_for_audify
 from .gutenberg import GutenbergClient
 from .novelbin import NovelBinClient, create_novel_epub, load_chapters_from_disk
+from .pdf_ingest import prepare_pdf_for_audify
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -111,6 +112,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-chapters", type=int, help="Maximum number of chapters to scrape"
     )
 
+    pdf_parser = subparsers.add_parser(
+        "prepare-pdf",
+        help="Extract text from a PDF and create a chaptered, Audify-friendly EPUB",
+    )
+    pdf_parser.add_argument("--input-pdf", type=Path, required=True, help="Source PDF file")
+    pdf_parser.add_argument("--output-epub", type=Path, required=True, help="Output EPUB file")
+    pdf_parser.add_argument("--title", help="Override title metadata (defaults to PDF filename)")
+    pdf_parser.add_argument("--author", default="Unknown", help="Author metadata")
+    pdf_parser.add_argument(
+        "--target-minutes",
+        type=int,
+        default=10,
+        help="Target reading time per part in minutes",
+    )
+    pdf_parser.add_argument(
+        "--words-per-minute",
+        type=int,
+        default=150,
+        help="Estimated TTS reading speed (words per minute)",
+    )
+
     return parser
 
 
@@ -179,6 +201,16 @@ def main() -> None:
             title=args.title, author=args.author, chapters=chapters, output_path=args.output_epub
         )
         print(f"Created EPUB: {output_path} with {len(chapters)} chapters")
+    elif args.command == "prepare-pdf":
+        output_path, parts = prepare_pdf_for_audify(
+            args.input_pdf,
+            args.output_epub,
+            target_minutes=args.target_minutes,
+            words_per_minute=args.words_per_minute,
+            title=args.title,
+            author=args.author,
+        )
+        print(f"Prepared: {output_path} ({parts} parts)")
 
 
 if __name__ == "__main__":

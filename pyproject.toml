@@ -12,6 +12,7 @@ authors = [{ name = "John Titus Jungao" }]
 dependencies = [
   "requests>=2.32.0",
   "beautifulsoup4>=4.12.0",
+  "pypdf>=5.0.0",
 ]
 
 [project.optional-dependencies]

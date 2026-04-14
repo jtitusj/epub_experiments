@@ -15,6 +15,7 @@ Current scope:
 3. Clean EPUB text for smoother TTS playback.
 4. Split long works into shorter listening parts.
 5. Generate EPUB navigation that works well in reader apps.
+6. Extract text from PDF books and generate chaptered EPUB output.
 
 This repo is not the Android app project. Keep mobile app planning outside the
 core direction of this repository.
@@ -76,6 +77,15 @@ conda run -p ./.conda/epub-exp epub-exp process-gutenberg \
   --words-per-minute 150
 ```
 
+Prepare a PDF book as an Audify-style EPUB:
+```bash
+conda run -p ./.conda/epub-exp epub-exp prepare-pdf \
+  --input-pdf "Project Mary Hail.pdf" \
+  --output-epub "data/processed/Project Mary Hail.audify.epub" \
+  --target-minutes 10 \
+  --words-per-minute 150
+```
+
 ## Current Architecture
 
 ```text
@@ -86,6 +96,14 @@ Project Gutenberg page
   - parse ebook metadata
   - find best EPUB link
   - download source EPUB
+        |
+        v
+  pdf_ingest.py (PDF input path)
+  - extract text from PDF pages
+  - remove repeated page noise
+  - detect chapter headings
+  - split chapters into subparts
+  - build EPUB package + NCX
         |
         v
   audify.py
@@ -125,6 +143,7 @@ Processed EPUBs are rewritten to improve listening:
 - chapter headings are preserved and used as navigation structure
 - an NCX table of contents is generated so readers can jump by chapter and part
 - common TTS-disrupting references and note markup are removed
+- PDF chapter headings are detected when available; fallback synthetic chapters are used otherwise
 
 ## Next Milestones
 
