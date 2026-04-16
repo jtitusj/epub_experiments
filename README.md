@@ -24,7 +24,6 @@ Validated examples:
 - `src/epub_experiments/audify.py`: EPUB cleanup, chunking, and TOC generation
 - `src/epub_experiments/pdf_ingest.py`: PDF text extraction, chapter detection, and EPUB creation
 - `src/epub_experiments/cli.py`: command-line entrypoint
-- `tests/`: parser and transformation tests
 - `data/raw/`: downloaded source EPUBs
 - `data/processed/`: Audify-ready output EPUBs
 
@@ -103,8 +102,8 @@ Prepare a PDF for Audify:
 
 ```bash
 conda run -p ./.conda/epub-exp epub-exp prepare-pdf \
-  --input-pdf "Project Mary Hail.pdf" \
-  --output-epub "data/processed/Project Mary Hail.audify.epub" \
+  --input-pdf "test.pdf" \
+  --output-epub "data/processed/test.epub" \
   --target-minutes 10 \
   --words-per-minute 150
 ```
