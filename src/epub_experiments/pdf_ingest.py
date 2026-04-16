@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import html
 import re
+import unicodedata
 import uuid
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 from .audify import ChunkEntry, TextBlock, chunk_blocks, render_chunk_xhtml, render_ncx
@@ -16,6 +18,7 @@ CHAPTER_HEADING_PATTERNS = (
     re.compile(r"^chapter\s+[ivxlcdm]+[\w\-:.]*$", flags=re.IGNORECASE),
     re.compile(r"^chapter\s+[a-z][a-z\-\s]*$", flags=re.IGNORECASE),
 )
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
 
 
 @dataclass(frozen=True)
@@ -31,7 +34,44 @@ class _BoundaryNoise:
 
 
 def _normalize_line(line: str) -> str:
-    return re.sub(r"\s+", " ", line).strip()
+    sanitized = _CONTROL_CHARS_RE.sub("", line)
+    normalized = unicodedata.normalize("NFKC", sanitized)
+    repaired = _repair_split_words(normalized)
+    return re.sub(r"\s+", " ", repaired).strip()
+
+
+def _repair_split_words(text: str) -> str:
+    def merge_single_upper(match: re.Match[str]) -> str:
+        first = match.group(1)
+        rest = match.group(2)
+        if first in {"A", "I"}:
+            return match.group(0)
+        return f"{first}{rest}"
+
+    def merge_single_lower(match: re.Match[str]) -> str:
+        first = match.group(1)
+        rest = match.group(2)
+        if first in {"a", "i"}:
+            return match.group(0)
+        return f"{first}{rest}"
+
+    single_upper_pattern = r"(?<![A-Za-z'’])([A-Z])\s+([a-z]{1,})(?![A-Za-z])"
+    single_lower_pattern = r"(?<![A-Za-z'’])([a-z])\s+([a-z]{2,})(?![A-Za-z])"
+    text = re.sub(single_upper_pattern, merge_single_upper, text)
+    text = re.sub(single_lower_pattern, merge_single_lower, text)
+    # Common broken-prefix artifacts seen in some PDFs (e.g., "som e", "em itting").
+    text = re.sub(r"(?<![A-Za-z'’])(som|em|com|mol)\s+([a-z]{1,})(?![A-Za-z])", r"\1\2", text)
+    # Prefix merges can expose another single-letter split next to them.
+    text = re.sub(single_lower_pattern, merge_single_lower, text)
+    return text
+
+
+def _compact_text(text: str) -> str:
+    return re.sub(r"\s+", "", text.lower())
+
+
+def _letters_only(text: str) -> str:
+    return re.sub(r"[^a-z]+", "", text.lower())
 
 
 def _is_page_number_line(text: str) -> bool:
@@ -44,6 +84,46 @@ def _is_page_number_line(text: str) -> bool:
     if re.fullmatch(r"(?:page\s+)?\d{1,5}(?:\s+of\s+\d{1,5})?", compact, flags=re.IGNORECASE):
         return True
     if re.fullmatch(r"[ivxlcdm]{1,12}", compact, flags=re.IGNORECASE):
+        return True
+    return False
+
+
+def _is_pdf_noise_line(text: str) -> bool:
+    compact = _compact_text(text)
+    letters = _letters_only(text)
+    if not compact:
+        return True
+
+    if "excerptfrom" in letters:
+        return True
+    if "thismaterialmaybeprotectedbycopyright" in letters:
+        return True
+    if "getpersonalizedbookpicks" in letters:
+        return True
+    if "signupnow" in letters:
+        return True
+    if "whatsnextonyourreadinglist" in letters:
+        return True
+
+    if compact in {"byandyweir", "abouttheauthor"}:
+        return True
+
+    return False
+
+
+def _is_toc_entry_line(text: str) -> bool:
+    compact = _compact_text(text)
+    if compact in {
+        "cover",
+        "titlepage",
+        "copyright",
+        "dedication",
+        "acknowledgments",
+        "abouttheauthor",
+        "byandyweir",
+    }:
+        return True
+    if compact.startswith("chapter") and len(compact) <= 24:
         return True
     return False
 
@@ -67,6 +147,147 @@ def _scan_boundary_noise(pages: list[list[str]]) -> _BoundaryNoise:
     )
 
 
+def _drop_front_matter_pages(pages: list[list[str]]) -> list[list[str]]:
+    first_story_idx = _find_first_story_page_idx(pages)
+    return pages[first_story_idx:]
+
+
+def _find_first_story_page_idx(pages: list[list[str]]) -> int:
+    if not pages:
+        return 0
+
+    toc_pages: list[int] = []
+    for idx, lines in enumerate(pages):
+        non_empty = [line for line in lines if line]
+        if not non_empty:
+            continue
+
+        has_contents = any(_compact_text(line) == "contents" for line in non_empty)
+        toc_like_count = sum(1 for line in non_empty if _is_toc_entry_line(line))
+        toc_ratio = toc_like_count / max(1, len(non_empty))
+        if has_contents or toc_like_count >= 8 or toc_ratio >= 0.6:
+            toc_pages.append(idx)
+
+    if not toc_pages:
+        return 0
+
+    last_toc_idx = max(toc_pages)
+    first_story_idx: int | None = None
+    for idx in range(last_toc_idx + 1, len(pages)):
+        non_empty = [line for line in pages[idx] if line]
+        if len(non_empty) < 10:
+            continue
+
+        toc_like_count = sum(1 for line in non_empty if _is_toc_entry_line(line))
+        if toc_like_count / len(non_empty) >= 0.4:
+            continue
+
+        narrative_like_count = sum(
+            1
+            for line in non_empty
+            if len(line) >= 20 and re.search(r"[.?!\"']", line)
+        )
+        if narrative_like_count >= 6:
+            first_story_idx = idx
+            break
+
+    if first_story_idx is None:
+        return 0
+
+    return first_story_idx
+
+
+def _extract_outline_chapter_starts(reader: Any) -> dict[int, str]:
+    starts: dict[int, str] = {}
+    chapter_re = re.compile(r"(?i)^chapter\s+\d+$")
+
+    def walk(items: list[Any]) -> None:
+        for item in items:
+            if isinstance(item, list):
+                walk(item)
+                continue
+
+            title = ""
+            if hasattr(item, "title"):
+                title = str(getattr(item, "title", "") or "").strip()
+            elif isinstance(item, dict):
+                title = str(item.get("/Title", "") or "").strip()
+
+            if not title or not chapter_re.fullmatch(title):
+                continue
+
+            try:
+                page_idx = reader.get_destination_page_number(item)
+            except Exception:
+                continue
+            if page_idx < 0:
+                continue
+            starts.setdefault(page_idx, title)
+
+    try:
+        outline = reader.outline
+    except Exception:
+        return {}
+
+    if not isinstance(outline, list):
+        return {}
+
+    walk(outline)
+    return starts
+
+
+def _extract_outline_entries(reader: Any) -> list[tuple[int, str]]:
+    entries: list[tuple[int, str]] = []
+
+    def walk(items: list[Any]) -> None:
+        for item in items:
+            if isinstance(item, list):
+                walk(item)
+                continue
+
+            title = ""
+            if hasattr(item, "title"):
+                title = str(getattr(item, "title", "") or "").strip()
+            elif isinstance(item, dict):
+                title = str(item.get("/Title", "") or "").strip()
+            if not title:
+                continue
+
+            try:
+                page_idx = reader.get_destination_page_number(item)
+            except Exception:
+                continue
+            if page_idx < 0:
+                continue
+            entries.append((page_idx, title))
+
+    try:
+        outline = reader.outline
+    except Exception:
+        return []
+    if not isinstance(outline, list):
+        return []
+
+    walk(outline)
+    entries.sort(key=lambda pair: pair[0])
+    return entries
+
+
+def _find_back_matter_start_page(reader: Any, chapter_starts: dict[int, str]) -> int | None:
+    if not chapter_starts:
+        return None
+
+    chapter_pattern = re.compile(r"(?i)^chapter\s+\d+$")
+    last_chapter_start = max(chapter_starts.keys())
+    for page_idx, title in _extract_outline_entries(reader):
+        if page_idx <= last_chapter_start:
+            continue
+        if chapter_pattern.fullmatch(title):
+            continue
+        return page_idx
+    return None
+
+
 def _is_chapter_heading(text: str) -> bool:
     stripped = text.strip()
     if not stripped:
@@ -85,18 +306,48 @@ def _format_chapter_title(text: str) -> str:
     return compact
 
 
+def _looks_like_new_paragraph_start(next_line: str, current_line: str) -> bool:
+    if not next_line or not current_line:
+        return False
+    if not re.search(r'[.!?]["”’\']?$', current_line.strip()):
+        return False
+    if re.match(r'^[“"—]', next_line):
+        return True
+    if re.match(r"^(?:I|He|She|They|We|You|It|The|A|An|My|His|Her|Our|Their|This|That|There|Here)\b", next_line):
+        return True
+    if re.match(r"^[A-Z][A-Za-z'.-]{1,}\s+[A-Z][A-Za-z'.-]{1,}\b", next_line):
+        return True
+    return False
+
+
 def _build_blocks(lines: list[str]) -> list[TextBlock]:
     blocks: list[TextBlock] = []
     current: str | None = None
+    in_toc = False
 
     for line in lines:
         stripped = line.strip()
+        if _is_pdf_noise_line(stripped):
+            continue
 
         if not stripped:
             if current:
                 blocks.append(TextBlock(kind="paragraph", text=current.strip()))
                 current = None
             continue
+
+        compact = _compact_text(stripped)
+        if compact == "contents":
+            if current:
+                blocks.append(TextBlock(kind="paragraph", text=current.strip()))
+                current = None
+            in_toc = True
+            continue
+
+        if in_toc:
+            if _is_toc_entry_line(stripped):
+                continue
+            in_toc = False
 
         if _is_chapter_heading(stripped):
             if current:
@@ -111,6 +362,11 @@ def _build_blocks(lines: list[str]) -> list[TextBlock]:
 
         if current.endswith("-"):
             current = f"{current[:-1]}{stripped}"
+            continue
+
+        if _looks_like_new_paragraph_start(stripped, current):
+            blocks.append(TextBlock(kind="paragraph", text=current.strip()))
+            current = stripped
             continue
 
         current = f"{current} {stripped}"
@@ -128,6 +384,45 @@ def split_pdf_into_chapters(blocks: list[TextBlock]) -> list[PdfChapter]:
     starts = [idx for idx, block in enumerate(blocks) if block.kind == "heading"]
     if not starts:
         return []
+    paragraph_idxs = [idx for idx, block in enumerate(blocks) if block.kind == "paragraph"]
+    if paragraph_idxs:
+        first_paragraph_idx = paragraph_idxs[0]
+        headings_before_first_paragraph = [idx for idx in starts if idx < first_paragraph_idx]
+        headings_after_first_paragraph = [idx for idx in starts if idx > first_paragraph_idx]
+        # Some PDFs expose only table-of-contents "Chapter N" lines as headings.
+        # If many headings appear before the first paragraph and none after,
+        # treat heading detection as unreliable and fall back to synthetic chapters.
+        if len(headings_before_first_paragraph) >= 3 and not headings_after_first_paragraph:
+            return []
+
+    run_start = starts[0]
+    run_end = starts[0]
+    run_len = 1
+    max_run_start = run_start
+    max_run_end = run_end
+    max_run_len = run_len
+    for idx in starts[1:]:
+        if idx == run_end + 1:
+            run_end = idx
+            run_len += 1
+        else:
+            if run_len > max_run_len:
+                max_run_start = run_start
+                max_run_end = run_end
+                max_run_len = run_len
+            run_start = idx
+            run_end = idx
+            run_len = 1
+    if run_len > max_run_len:
+        max_run_start = run_start
+        max_run_end = run_end
+        max_run_len = run_len
+
+    if max_run_len >= 3:
+        run_near_start = max_run_start <= max(10, len(blocks) // 4)
+        has_heading_after_run = any(idx > max_run_end for idx in starts)
+        if run_near_start and not has_heading_after_run:
+            return []
 
     chapters: list[PdfChapter] = []
     if starts[0] > 0:
@@ -151,7 +446,8 @@ def split_pdf_into_chapters(blocks: list[TextBlock]) -> list[PdfChapter]:
 def _synthetic_chapters_from_paragraphs(
     paragraph_blocks: list[TextBlock], target_words: int
 ) -> list[PdfChapter]:
-    chunks = chunk_blocks(paragraph_blocks, target_words=target_words)
+    split_blocks = _split_large_paragraph_blocks(paragraph_blocks, target_words=target_words)
+    chunks = chunk_blocks(split_blocks, target_words=target_words)
     chapters: list[PdfChapter] = []
     for idx, chunk in enumerate(chunks, start=1):
         chapters.append(PdfChapter(title=f"Chapter {idx}", blocks=chunk))
@@ -205,6 +501,8 @@ def extract_pdf_text_blocks(input_pdf: Path) -> list[TextBlock]:
         raise FileNotFoundError(f"Input PDF not found: {input_pdf}")
 
     reader = PdfReader(str(input_pdf))
+    chapter_starts_by_page = _extract_outline_chapter_starts(reader)
+    back_matter_start_page = _find_back_matter_start_page(reader, chapter_starts_by_page)
     raw_pages: list[list[str]] = []
 
     for page in reader.pages:
@@ -214,13 +512,24 @@ def extract_pdf_text_blocks(input_pdf: Path) -> list[TextBlock]:
 
     if not raw_pages:
         return []
+    first_story_idx = _find_first_story_page_idx(raw_pages)
+    end_story_idx = len(raw_pages)
+    if back_matter_start_page is not None:
+        end_story_idx = max(first_story_idx, min(end_story_idx, back_matter_start_page))
+    raw_pages = raw_pages[first_story_idx:end_story_idx]
 
     noise = _scan_boundary_noise(raw_pages)
     filtered_lines: list[str] = []
 
-    for lines in raw_pages:
+    for rel_page_idx, lines in enumerate(raw_pages):
         if not lines:
             continue
+        original_page_idx = first_story_idx + rel_page_idx
+        chapter_title = chapter_starts_by_page.get(original_page_idx)
+        if chapter_title:
+            filtered_lines.append("")
+            filtered_lines.append(chapter_title)
+            filtered_lines.append("")
 
         non_empty = [line for line in lines if line]
         first_line = non_empty[0] if non_empty else None

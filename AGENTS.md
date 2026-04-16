@@ -31,6 +31,9 @@ core direction of this repository.
 - Default to the repo-local Conda environment for all commands.
 - Prefer explicit cleanup profiles for edition-specific behavior instead of
   broad heuristics that may break other books.
+- For PDF inputs, prefer embedded outline/bookmark chapter boundaries when present.
+- For PDF inputs, trim detectable front matter and back matter outside core chapter content.
+- For PDF inputs, preserve paragraph breaks where possible and normalize common extraction artifacts (split words, ligatures, control chars).
 
 ## Developer Commands
 
@@ -100,8 +103,11 @@ Project Gutenberg page
         v
   pdf_ingest.py (PDF input path)
   - extract text from PDF pages
+  - normalize extraction artifacts (ligatures/control chars/split words)
   - remove repeated page noise
-  - detect chapter headings
+  - trim front matter / back matter when detectable
+  - detect chapter headings (prefer PDF outline bookmarks)
+  - preserve paragraph boundaries with line-merge heuristics
   - split chapters into subparts
   - build EPUB package + NCX
         |
@@ -143,7 +149,9 @@ Processed EPUBs are rewritten to improve listening:
 - chapter headings are preserved and used as navigation structure
 - an NCX table of contents is generated so readers can jump by chapter and part
 - common TTS-disrupting references and note markup are removed
-- PDF chapter headings are detected when available; fallback synthetic chapters are used otherwise
+- PDF chapter headings prefer outline/bookmark boundaries when available; fallback synthetic chapters are used otherwise
+- PDF front/back matter is trimmed when detectable
+- PDF paragraph spacing is preserved with extraction heuristics
 
 ## Next Milestones
 

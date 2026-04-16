@@ -17,7 +17,6 @@ Validated examples:
 
 - Benjamin Franklin: `https://www.gutenberg.org/ebooks/20203`
 - Marcus Aurelius: `https://www.gutenberg.org/ebooks/2680`
-- `Project Mary Hail.pdf` (local PDF workflow)
 
 ## Project Layout
 
@@ -132,12 +131,16 @@ Processed EPUBs are rewritten to improve listening:
 - chapter headings are preserved and used as navigation structure
 - an NCX table of contents is generated so Audify can jump by chapter and part
 - common TTS-disrupting references and note markup are removed
-- PDF chapter headings are detected where available; otherwise synthetic chapter splits are generated
+- PDF chapter boundaries prefer embedded PDF outline/bookmark entries (for example `Chapter 1`, `Chapter 2`, ...)
+- PDF front matter (for example contents pages) and back matter (for example dedication/author pages after the last chapter) are trimmed when detectable
+- PDF extraction normalizes control characters/ligatures and repairs common split-word artifacts from glyph spacing
+- PDF paragraph spacing is preserved with line-merge heuristics so dialogue/narrative breaks are retained better
+- if no reliable chapter boundaries are available, synthetic chapter splits are generated
 - non-text/image-only PDFs currently require OCR support (not yet implemented)
 
 ## Notes
 
 - Project Gutenberg markup varies by book, so the generic path is intentionally conservative.
 - The Franklin-specific cleanup is explicit because that edition contains editor material and annotation markup mixed into the reading flow.
-- PDF extraction is conservative and removes only high-confidence repeated page headers/footers.
+- PDF extraction is conservative and removes only high-confidence repeated page headers/footers plus common ebook-export footer noise lines.
 - Respect Project Gutenberg's Terms of Use when downloading and redistributing files.
